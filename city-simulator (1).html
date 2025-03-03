@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>City Simulator with Car Driving</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+            background-color: #5c8a8a;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 10px;
+            text-align: center;
+        }
+        #stats {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background-color: rgba(255, 255, 255, 0.7);
+            padding: 10px;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="stats">
+        <div>Speed: <span id="speed">0</span> mph</div>
+        <div>Distance: <span id="distance">0</span> miles</div>
+        <div>Time: <span id="time">0:00</span></div>
+    </div>
+    <div id="controls">
+        <div>Controls: Arrow keys to drive. R to reset.</div>
+    </div>
+
+    <script>
+        // Game canvas setup
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Game state
+        let gameTime = 0;
+        let lastTimestamp = 0;
+        let gameStarted = false;
+        let distance = 0;
+
+        // Car properties
+        const car = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            width: 40,
+            height: 70,
+            angle: 0,
+            speed: 0,
+            maxSpeed: 5,
+            acceleration: 0.1,
+            deceleration: 0.05,
+            rotationSpeed: 0.04,
+            isMovingForward: false,
+            isMovingBackward: false,
+            isTurningLeft: false,
+            isTurningRight: false
+        };
+
+        // City map generation
+        const mapSize = 2000;
+        const gridSize = 200;
+        const buildings = [];
+        const roads = [];
+
+        // Generate buildings and roads
+        function generateCity() {
+            // Clear existing buildings and roads
+            buildings.length = 0;
+            roads.length = 0;
+            
+            // Create grid of roads
+            for (let x = 0; x < mapSize; x += gridSize) {
+                roads.push({
+                    x1: x,
+                    y1: 0,
+                    x2: x,
+                    y2: mapSize,
+                    width: 30
+                });
+            }
+            
+            for (let y = 0; y < mapSize; y += gridSize) {
+                roads.push({
+                    x1: 0,
+                    y1: y,
+                    x2: mapSize,
+                    y2: y,
+                    width: 30
+                });
+            }
+            
+            // Create buildings between roads
+            for (let x = 0; x < mapSize - gridSize; x += gridSize) {
+                for (let y = 0; y < mapSize - gridSize; y += gridSize) {
+                    // Skip some blocks randomly to create parks or empty spaces
+                    if (Math.random() > 0.8) continue;
+                    
+                    const buildingWidth = gridSize * 0.7;
+                    const buildingHeight = gridSize * 0.7;
+                    const buildingX = x + (gridSize - buildingWidth) / 2;
+                    const buildingY = y + (gridSize - buildingHeight) / 2;
+                    
+                    buildings.push({
+                        x: buildingX,
+                        y: buildingY,
+                        width: buildingWidth,
+                        height: buildingHeight,
+                        color: getRandomBuildingColor()
+                    });
+                }
+            }
+        }
+
+        function getRandomBuildingColor() {
+            const colors = [
+                '#8c8c8c', // Gray
+                '#a6a6a6', // Light gray
+                '#d9d9d9', // Very light gray
+                '#6699cc', // Blue glass
+                '#99ccff', // Light blue glass
+                '#ffcc99', // Tan
+                '#cc9966'  // Brown
+            ];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        // Camera position (centered on car)
+        const camera = {
+            x: 0,
+            y: 0
+        };
+
+        // Keyboard controls
+        const keys = {};
+        
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            gameStarted = true;
+            
+            // Reset game with R key
+            if (e.key === 'r' || e.key === 'R') {
+                resetGame();
+            }
+        });
+        
+        window.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+
+        function updateCar(deltaTime) {
+            // Update car movement based on keyboard input
+            car.isMovingForward = keys['ArrowUp'] || keys['w'] || keys['W'];
+            car.isMovingBackward = keys['ArrowDown'] || keys['s'] || keys['S'];
+            car.isTurningLeft = keys['ArrowLeft'] || keys['a'] || keys['A'];
+            car.isTurningRight = keys['ArrowRight'] || keys['d'] || keys['D'];
+            
+            // Apply acceleration or deceleration
+            if (car.isMovingForward) {
+                car.speed += car.acceleration * deltaTime;
+                if (car.speed > car.maxSpeed) car.speed = car.maxSpeed;
+            } else if (car.isMovingBackward) {
+                car.speed -= car.acceleration * deltaTime;
+                if (car.speed < -car.maxSpeed / 2) car.speed = -car.maxSpeed / 2;
+            } else {
+                // Apply deceleration when no input
+                if (car.speed > 0) {
+                    car.speed -= car.deceleration * deltaTime;
+                    if (car.speed < 0) car.speed = 0;
+                } else if (car.speed < 0) {
+                    car.speed += car.deceleration * deltaTime;
+                    if (car.speed > 0) car.speed = 0;
+                }
+            }
+            
+            // Apply turning
+            if (car.speed !== 0) {
+                if (car.isTurningLeft) {
+                    car.angle -= car.rotationSpeed * Math.abs(car.speed) * deltaTime;
+                } else if (car.isTurningRight) {
+                    car.angle += car.rotationSpeed * Math.abs(car.speed) * deltaTime;
+                }
+            }
+            
+            // Move car based on angle and speed
+            car.x += Math.sin(car.angle) * car.speed * deltaTime;
+            car.y -= Math.cos(car.angle) * car.speed * deltaTime;
+            
+            // Keep car within map bounds
+            if (car.x < 0) car.x = 0;
+            if (car.x > mapSize) car.x = mapSize;
+            if (car.y < 0) car.y = 0;
+            if (car.y > mapSize) car.y = mapSize;
+            
+            // Update camera to follow car
+            camera.x = car.x - canvas.width / 2;
+            camera.y = car.y - canvas.height / 2;
+            
+            // Ensure camera stays within map bounds
+            if (camera.x < 0) camera.x = 0;
+            if (camera.y < 0) camera.y = 0;
+            if (camera.x > mapSize - canvas.width) camera.x = mapSize - canvas.width;
+            if (camera.y > mapSize - canvas.height) camera.y = mapSize - canvas.height;
+            
+            // Update distance traveled
+            if (Math.abs(car.speed) > 0) {
+                distance += Math.abs(car.speed) * deltaTime / 1000;
+            }
+        }
+
+        function renderGame() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw grass background
+            ctx.fillStyle = '#5c8a8a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw roads
+            ctx.fillStyle = '#444444';
+            roads.forEach(road => {
+                // Only draw if road is in view
+                if (isInView(road.x1, road.y1, road.width, road.width) ||
+                    isInView(road.x2, road.y2, road.width, road.width)) {
+                    
+                    ctx.beginPath();
+                    ctx.lineWidth = road.width;
+                    ctx.moveTo(road.x1 - camera.x, road.y1 - camera.y);
+                    ctx.lineTo(road.x2 - camera.x, road.y2 - camera.y);
+                    ctx.stroke();
+                    
+                    // Draw yellow road lines
+                    ctx.beginPath();
+                    ctx.strokeStyle = '#FFFF00';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([20, 20]);
+                    ctx.moveTo(road.x1 - camera.x, road.y1 - camera.y);
+                    ctx.lineTo(road.x2 - camera.x, road.y2 - camera.y);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.strokeStyle = '#000000';
+                }
+            });
+            
+            // Draw buildings
+            buildings.forEach(building => {
+                // Only draw if building is in view
+                if (isInView(building.x, building.y, building.width, building.height)) {
+                    ctx.fillStyle = building.color;
+                    ctx.fillRect(
+                        building.x - camera.x,
+                        building.y - camera.y,
+                        building.width,
+                        building.height
+                    );
+                    
+                    // Draw windows
+                    drawBuildingWindows(building);
+                    
+                    // Draw building outline
+                    ctx.strokeStyle = '#000000';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(
+                        building.x - camera.x,
+                        building.y - camera.y,
+                        building.width,
+                        building.height
+                    );
+                }
+            });
+            
+            // Draw car
+            drawCar();
+            
+            // Draw minimap
+            drawMinimap();
+            
+            // Update stats display
+            updateStats();
+        }
+
+        function drawCar() {
+            ctx.save();
+            ctx.translate(car.x - camera.x, car.y - camera.y);
+            ctx.rotate(car.angle);
+            
+            // Car body
+            ctx.fillStyle = 'red';
+            ctx.fillRect(-car.width / 2, -car.height / 2, car.width, car.height);
+            
+            // Car windows
+            ctx.fillStyle = '#99ccff';
+            ctx.fillRect(-car.width / 2 + 5, -car.height / 2 + 5, car.width - 10, car.height / 3);
+            
+            // Car lights
+            ctx.fillStyle = 'yellow';
+            ctx.fillRect(-car.width / 2 + 5, -car.height / 2 + car.height - 10, 10, 5);
+            ctx.fillRect(car.width / 2 - 15, -car.height / 2 + car.height - 10, 10, 5);
+            
+            ctx.restore();
+        }
+
+        function drawBuildingWindows(building) {
+            const windowSize = 10;
+            const windowGap = 15;
+            const offsetX = building.x - camera.x + windowGap;
+            const offsetY = building.y - camera.y + windowGap;
+            const columns = Math.floor((building.width - windowGap) / (windowSize + windowGap));
+            const rows = Math.floor((building.height - windowGap) / (windowSize + windowGap));
+            
+            ctx.fillStyle = '#FFFF99';
+            
+            for (let row = 0; row < rows; row++) {
+                for (let col = 0; col < columns; col++) {
+                    // Randomly turn off some windows
+                    if (Math.random() > 0.7) {
+                        ctx.fillStyle = '#333333';
+                    } else {
+                        ctx.fillStyle = '#FFFF99';
+                    }
+                    
+                    ctx.fillRect(
+                        offsetX + col * (windowSize + windowGap),
+                        offsetY + row * (windowSize + windowGap),
+                        windowSize,
+                        windowSize
+                    );
+                }
+            }
+        }
+
+        function drawMinimap() {
+            const minimapSize = 150;
+            const minimapScale = minimapSize / mapSize;
+            const padding = 20;
+            
+            // Draw minimap background
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.fillRect(canvas.width - minimapSize - padding, padding, minimapSize, minimapSize);
+            ctx.strokeStyle = '#000000';
+            ctx.strokeRect(canvas.width - minimapSize - padding, padding, minimapSize, minimapSize);
+            
+            // Draw roads on minimap
+            ctx.strokeStyle = '#444444';
+            ctx.lineWidth = 2;
+            roads.forEach(road => {
+                ctx.beginPath();
+                ctx.moveTo(
+                    canvas.width - minimapSize - padding + road.x1 * minimapScale,
+                    padding + road.y1 * minimapScale
+                );
+                ctx.lineTo(
+                    canvas.width - minimapSize - padding + road.x2 * minimapScale,
+                    padding + road.y2 * minimapScale
+                );
+                ctx.stroke();
+            });
+            
+            // Draw buildings on minimap
+            buildings.forEach(building => {
+                ctx.fillStyle = building.color;
+                ctx.fillRect(
+                    canvas.width - minimapSize - padding + building.x * minimapScale,
+                    padding + building.y * minimapScale,
+                    building.width * minimapScale,
+                    building.height * minimapScale
+                );
+            });
+            
+            // Draw car on minimap
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(
+                canvas.width - minimapSize - padding + car.x * minimapScale,
+                padding + car.y * minimapScale,
+                3,
+                0,
+                Math.PI * 2
+            );
+            ctx.fill();
+            
+            // Draw view area on minimap
+            ctx.strokeStyle = 'blue';
+            ctx.strokeRect(
+                canvas.width - minimapSize - padding + camera.x * minimapScale,
+                padding + camera.y * minimapScale,
+                canvas.width * minimapScale,
+                canvas.height * minimapScale
+            );
+        }
+
+        function isInView(x, y, width, height) {
+            return (
+                x + width >= camera.x &&
+                y + height >= camera.y &&
+                x <= camera.x + canvas.width &&
+                y <= camera.y + canvas.height
+            );
+        }
+
+        function updateStats() {
+            document.getElementById('speed').textContent = Math.abs(Math.round(car.speed * 10));
+            document.getElementById('distance').textContent = distance.toFixed(1);
+            
+            const minutes = Math.floor(gameTime / 60);
+            const seconds = Math.floor(gameTime % 60);
+            document.getElementById('time').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        function resetGame() {
+            car.x = mapSize / 2;
+            car.y = mapSize / 2;
+            car.angle = 0;
+            car.speed = 0;
+            gameTime = 0;
+            distance = 0;
+            generateCity();
+        }
+
+        function gameLoop(timestamp) {
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const deltaTime = timestamp - lastTimestamp;
+            lastTimestamp = timestamp;
+            
+            if (gameStarted) {
+                gameTime += deltaTime / 1000;
+            }
+            
+            updateCar(deltaTime);
+            renderGame();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Initialize game
+        generateCity();
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>
